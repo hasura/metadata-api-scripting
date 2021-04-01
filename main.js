@@ -114,14 +114,6 @@ async function getListOfTables(database = DATABASE) {
         headers: { 'Content-Type': 'application/json' },
     })
     res = await res.json();
-    // if (res.result) {
-    //     return res.result.slice(1).map(row => {
-    //         return {
-    //             schema: row[0],
-    //             table: row[1]
-    //         }
-    //     })
-    // }
     return res;
 }
 
@@ -709,8 +701,7 @@ async function main() {
     
     let allSchemas = [];
 
-
-    // table tracking  status
+    // [1] table tracking status
     if (true) {
         let display = new Table({
             head: ['schema', 'table', 'is is tracked']
@@ -723,15 +714,15 @@ async function main() {
         console.log(display.toString())
     }
 
-    //run this part to track the untracked tables
+    // [2] track tables
     if (false) {
         allSchemas = await mergeData();
         let promises = [];
         allSchemas.forEach(async (table) => { 
-            // block where each "table tracking API call" is made
+            
             if (!table.is_table_tracked) {
                 try {
-
+                    // block where each "table tracking API call" is made
                     let body = {
                       "type": "mssql_track_table",
                       "args": {
@@ -753,6 +744,7 @@ async function main() {
         })   
     }
 
+    // [3] untracked relationships
     if (false) {
       allSchemas = await mergeData();
       let uniqueSchemas = allSchemas.map(t => t.table_schema).filter((item, i, ar) => ar.indexOf(item) === i);  
@@ -797,6 +789,7 @@ async function main() {
                 bulkRelTrack.push(objTrack);
                 console.log(`${currentSchema} ${objTrack.data.relName} [object] [not tracked]`)
 
+                // [4] track object relationships
                 if (false) {
                   let res = trackRel(objTrack.upQuery);
                   res.then(data => {
@@ -829,6 +822,7 @@ async function main() {
                 bulkRelTrack.push(arrTrack);
                 console.log(`${currentSchema} ${arrTrack.data.relName} [array] [not tracked]`)
 
+                // [5] track array relationships
                 if (false) {
                   let res = trackRel(arrTrack.upQuery);
                   res.then(data => {
@@ -840,6 +834,7 @@ async function main() {
             }
             
           });
+          // [6] - all suggested relationships grouped by schema
           untrackedRelations[currentSchema] = bulkRelTrack;
       })
     }
