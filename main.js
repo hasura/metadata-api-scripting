@@ -200,6 +200,8 @@ const mergeDataMssql = (data, metadataTables) => {
     // eslint-disable-next-line no-empty
   } catch {}
 
+  console.log(JSON.stringify(fkRelations))
+  console.log(metadataTables)
   const trackedFkData = fkRelations
     .map((fk) => ({
       ...fk,
@@ -382,6 +384,7 @@ const isExistingArrRel = (currentArrRels, relCols, relTable) => {
 };
 
 const suggestedRelationshipsRaw = (tableName, allSchemas, currentSchema) => {
+
   const objRels = [];
   const arrRels = [];
 
@@ -673,7 +676,7 @@ async function main() {
   let allSchemas = [];
 
   // [1] table tracking status
-  if (true) {
+  if (false) {
     let display = new Table({
       head: ["schema", "table", "is is tracked"],
       colWidths: [30, 30, 30],
@@ -722,17 +725,25 @@ async function main() {
 
   // [3] untracked relationships
   if (false) {
-    allSchemas = await mergeData();
-    let uniqueSchemas = allSchemas
-      .map((t) => t.table_schema)
-      .filter((item, i, ar) => ar.indexOf(item) === i);
+    
+    let res1 = await getListOfTables();
+    let res2 = await getListOfFKRelationships();
+    let metaDataTables = await getListOfTrackedTables();
+
+    
+    let uniqueSchemas = metaDataTables.map(t => t.table.schema).filter((item, i, ar) => ar.indexOf(item) === i);
+    console.log(uniqueSchemas);
+
     let untrackedRelations = {};
+
     uniqueSchemas.forEach((currentSchema) => {
+      let allSchemas = mergeDataMssql([res1, res2], metaDataTables.filter(t => t.table.schema === currentSchema));
       let currentSource = DATABASE;
       const trackedTables = allSchemas.filter(
         (table) =>
           table.is_table_tracked && table.table_schema === currentSchema
       );
+
       const tableRelMapping = trackedTables.map((table) => ({
         table_name: table.table_name,
         existingFields: getExistingFieldsMap(table),
@@ -742,9 +753,9 @@ async function main() {
           currentSchema
         ),
       }));
-
       let bulkRelTrack = [];
       tableRelMapping.forEach((table) => {
+        
         // check relations.obj and relations.arr length and form queries
         if (table.relations.objectRel.length) {
           table.relations.objectRel.forEach((indivObjectRel) => {
@@ -764,11 +775,11 @@ async function main() {
               downQuery,
               data: indivObjectRel,
             };
-
+           
             bulkRelTrack.push(objTrack);
-            console.log(
-              `${currentSchema} ${objTrack.data.relName} [object] [not tracked]`
-            );
+            // console.log(
+            //   `${currentSchema} ${objTrack.data.relName} [object] [not tracked]`
+            // );
 
             // [4] track object relationships
             if (false) {
@@ -798,11 +809,11 @@ async function main() {
               downQuery,
               data: indivArrayRel,
             };
-
+            
             bulkRelTrack.push(arrTrack);
-            console.log(
-              `${currentSchema} ${arrTrack.data.relName} [array] [not tracked]`
-            );
+            // console.log(
+            //   `${currentSchema} ${arrTrack.data.relName} [array] [not tracked]`
+            // );
 
             // [5] track array relationships
             if (false) {
