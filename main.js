@@ -1,10 +1,12 @@
-
-const fetch = require("node-fetch"); 
-const inflection = require('inflection');
-var Table = require('cli-table');
+const fetch = require("node-fetch");
+const inflection = require("inflection");
+var Table = require("cli-table");
 
 //modify DB name
-let DATABASE = 'bikesDB';
+let DATABASE = "bikesDB";
+
+//modify hasura url
+let HASURA_URL = "http://localhost:8080";
 
 // SQL to get all the schema & tables (+column info on each table) present in the sql server database
 let fetchSQLTablesSQL = `
@@ -62,7 +64,7 @@ FROM sys.objects as obj
         WHERE a.column_id > 0 and a.object_id = obj.object_id
         FOR JSON path
 ) AS [isc](json) where obj.type_desc in ('USER_TABLE', 'VIEW')
-`
+`;
 
 let fetchFKRelationships = `
 SELECT
@@ -99,243 +101,225 @@ INNER JOIN sys.schemas sch2
 `;
 
 async function getListOfTables(database = DATABASE) {
-    let body = {
-        "type": "mssql_run_sql",
-        "args": {
-            "source": database,
-            "sql": fetchSQLTablesSQL,
-            "cascade": false,
-            "read_only": false
-        }
-    }
-    let res = await fetch('http://localhost:8080/v2/query', {
-        method: 'post',
-        body:    JSON.stringify(body),
-        headers: { 'Content-Type': 'application/json' },
-    })
-    res = await res.json();
-    return res;
+  let body = {
+    type: "mssql_run_sql",
+    args: {
+      source: database,
+      sql: fetchSQLTablesSQL,
+      cascade: false,
+      read_only: false,
+    },
+  };
+  let res = await fetch(`${HASURA_URL}/v2/query`, {
+    method: "post",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  });
+  res = await res.json();
+  return res;
 }
 
 async function getListOfFKRelationships(database = DATABASE) {
-    let body = {
-        "type": "mssql_run_sql",
-        "args": {
-            "source": database,
-            "sql": fetchFKRelationships,
-            "cascade": false,
-            "read_only": false
-        }
-    }
-    let res = await fetch('http://localhost:8080/v2/query', {
-        method: 'post',
-        body:    JSON.stringify(body),
-        headers: { 'Content-Type': 'application/json' },
-    })
-    res = await res.json();
-    // if (res) {
-    //     return JSON.parse(res.result.slice(1));
-    // }
-    return res;
+  let body = {
+    type: "mssql_run_sql",
+    args: {
+      source: database,
+      sql: fetchFKRelationships,
+      cascade: false,
+      read_only: false,
+    },
+  };
+  let res = await fetch(`${HASURA_URL}/v2/query`, {
+    method: "post",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  });
+  res = await res.json();
+  return res;
 }
 
 async function getListOfTrackedTables(database = DATABASE) {
-    let body = {"type":"export_metadata","args":{}};
-    let res = await fetch('http://localhost:8080/v1/metadata', {
-        method: 'post',
-        body:    JSON.stringify(body),
-        headers: { 'Content-Type': 'application/json' },
-    })
-    res = await res.json();
-    if (res.sources) {
-     return res.sources.filter(s => s.name === DATABASE && s.kind === 'mssql')[0].tables;
-    }
-    return res.json();
+  let body = { type: "export_metadata", args: {} };
+  let res = await fetch(`${HASURA_URL}/v1/metadata`, {
+    method: "post",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  });
+  res = await res.json();
+  if (res.sources) {
+    return res.sources.filter(
+      (s) => s.name === DATABASE && s.kind === "mssql"
+    )[0].tables;
+  }
+  return res.json();
 }
 
-async function trackTable(body) {
-    let res = await fetch('http://localhost:8080/v1/metadata', {
-        method: 'post',
-        body:    JSON.stringify(body),
-        headers: { 'Content-Type': 'application/json' },
-    })
-    return res.json()
+async function updateMetaData(body) {
+  let res = await fetch(`${HASURA_URL}/v1/metadata`, {
+    method: "post",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  });
+  return res.json();
 }
 
-async function trackRel(body) {
-  let res = await fetch('http://localhost:8080/v1/metadata', {
-      method: 'post',
-      body:    JSON.stringify(body),
-      headers: { 'Content-Type': 'application/json' },
-  })
-  return res.json()
-}
+const permKeys = [
+  "insert_permissions",
+  "update_permissions",
+  "select_permissions",
+  "delete_permissions",
+];
 
-const permKeys= [
-    'insert_permissions',
-    'update_permissions',
-    'select_permissions',
-    'delete_permissions',
-  ];
-  
-  const keyToPermission = {
-    insert_permissions: 'insert',
-    update_permissions: 'update',
-    select_permissions: 'select',
-    delete_permissions: 'delete',
-  };
-
-const mergeDataMssql = (
-    data,
-    metadataTables
-  ) => {
-    const result= [];
-    const tables= [];
-    let fkRelations = [];
-    data[0].result.slice(1).forEach(row => {
-      try {
-        tables.push({
-          table_schema: row[0],
-          table_name: row[1],
-          table_type: row[2],
-          comment: row[3],
-          columns: JSON.parse(row[4]),
-        });
-        // eslint-disable-next-line no-empty
-      } catch (err) {
-        console.log(err);
-      }
-    });
-    try {
-      fkRelations = JSON.parse(data[1].result.slice(1).join());
-      // eslint-disable-next-line no-empty
-    } catch {}
-  
-    const trackedFkData = fkRelations
-      .map(fk => ({
-        ...fk,
-        is_table_tracked: !!metadataTables.some(
-          t =>
-            t.table.name === fk.table_name && t.table.schema === fk.table_schema
-        ),
-        is_ref_table_tracked: !!metadataTables.some(
-          t =>
-            t.table.name === fk.ref_table &&
-            t.table.schema === fk.ref_table_schema
-        ),
-      }))
-      .map(fk => {
-        const mapping = {};
-        fk.column_mapping.forEach(cols => {
-          mapping[cols.column] = cols.referenced_column;
-        });
-        return {
-          ...fk,
-          column_mapping: mapping,
-          ref_table_table_schema: fk.ref_table_schema,
-        };
-      });
-  
-    tables.forEach(table => {
-      const metadataTable = metadataTables?.find(
-        t =>
-          t.table.schema === table.table_schema &&
-          t.table.name === table.table_name
-      );
-  
-      const fkConstraints = trackedFkData.filter(
-        (fk) =>
-          fk.table_schema === table.table_schema &&
-          fk.table_name === table.table_name
-      );
-  
-      const refFkConstraints = trackedFkData.filter(
-        (fk) =>
-          fk.ref_table_schema === table.table_schema &&
-          fk.ref_table === table.table_name &&
-          fk.is_ref_table_tracked
-      );
-  
-      const relationships = [];
-      metadataTable?.array_relationships?.forEach(rel => {
-        relationships.push({
-          rel_def: rel.using,
-          rel_name: rel.name,
-          table_name: table.table_name,
-          table_schema: table.table_schema,
-          rel_type: 'array',
-        });
-      });
-  
-      metadataTable?.object_relationships?.forEach(rel => {
-        relationships.push({
-          rel_def: rel.using,
-          rel_name: rel.name,
-          table_name: table.table_name,
-          table_schema: table.table_schema,
-          rel_type: 'object',
-        });
-      });
-  
-      const rolePermMap = permKeys.reduce((rpm, key) => {
-        if (metadataTable) {
-          metadataTable[key]?.forEach(
-            (perm) => {
-              rpm[perm.role] = {
-                permissions: {
-                  ...(rpm[perm.role] && rpm[perm.role].permissions),
-                  [keyToPermission[key]]: perm.permission,
-                },
-              };
-            }
-          );
-        }
-        return rpm;
-      }, {});
-  
-      const permissions = Object.keys(rolePermMap).map(
-        role => ({
-          role_name: role,
-          permissions: rolePermMap[role].permissions,
-          table_name: table.table_name,
-          table_schema: table.table_schema,
-        })
-      );
-  
-      const mergedInfo = {
-        table_schema: table.table_schema,
-        table_name: table.table_name,
-        table_type: table.table_type,
-        is_table_tracked: metadataTables.some(
-          t =>
-            t.table.name === table.table_name &&
-            t.table.schema === table.table_schema
-        ),
-        columns: table.columns,
-        comment: '',
-        triggers: [],
-        primary_key: null,
-        relationships,
-        permissions,
-        unique_constraints: [],
-        check_constraints: [],
-        foreign_key_constraints: fkConstraints,
-        opp_foreign_key_constraints: refFkConstraints,
-        view_info: null,
-        remote_relationships: [],
-        is_enum: false,
-        configuration: undefined,
-        computed_fields: [],
-      };
-  
-      result.push(mergedInfo);
-    });
-    return result;
+const keyToPermission = {
+  insert_permissions: "insert",
+  update_permissions: "update",
+  select_permissions: "select",
+  delete_permissions: "delete",
 };
 
+const mergeDataMssql = (data, metadataTables) => {
+  const result = [];
+  const tables = [];
+  let fkRelations = [];
+  data[0].result.slice(1).forEach((row) => {
+    try {
+      tables.push({
+        table_schema: row[0],
+        table_name: row[1],
+        table_type: row[2],
+        comment: row[3],
+        columns: JSON.parse(row[4]),
+      });
+      // eslint-disable-next-line no-empty
+    } catch (err) {
+      console.log(err);
+    }
+  });
+  try {
+    fkRelations = JSON.parse(data[1].result.slice(1).join());
+    // eslint-disable-next-line no-empty
+  } catch {}
+
+  const trackedFkData = fkRelations
+    .map((fk) => ({
+      ...fk,
+      is_table_tracked: !!metadataTables.some(
+        (t) =>
+          t.table.name === fk.table_name && t.table.schema === fk.table_schema
+      ),
+      is_ref_table_tracked: !!metadataTables.some(
+        (t) =>
+          t.table.name === fk.ref_table &&
+          t.table.schema === fk.ref_table_schema
+      ),
+    }))
+    .map((fk) => {
+      const mapping = {};
+      fk.column_mapping.forEach((cols) => {
+        mapping[cols.column] = cols.referenced_column;
+      });
+      return {
+        ...fk,
+        column_mapping: mapping,
+        ref_table_table_schema: fk.ref_table_schema,
+      };
+    });
+
+  tables.forEach((table) => {
+    const metadataTable = metadataTables?.find(
+      (t) =>
+        t.table.schema === table.table_schema &&
+        t.table.name === table.table_name
+    );
+
+    const fkConstraints = trackedFkData.filter(
+      (fk) =>
+        fk.table_schema === table.table_schema &&
+        fk.table_name === table.table_name
+    );
+
+    const refFkConstraints = trackedFkData.filter(
+      (fk) =>
+        fk.ref_table_schema === table.table_schema &&
+        fk.ref_table === table.table_name &&
+        fk.is_ref_table_tracked
+    );
+
+    const relationships = [];
+    metadataTable?.array_relationships?.forEach((rel) => {
+      relationships.push({
+        rel_def: rel.using,
+        rel_name: rel.name,
+        table_name: table.table_name,
+        table_schema: table.table_schema,
+        rel_type: "array",
+      });
+    });
+
+    metadataTable?.object_relationships?.forEach((rel) => {
+      relationships.push({
+        rel_def: rel.using,
+        rel_name: rel.name,
+        table_name: table.table_name,
+        table_schema: table.table_schema,
+        rel_type: "object",
+      });
+    });
+
+    const rolePermMap = permKeys.reduce((rpm, key) => {
+      if (metadataTable) {
+        metadataTable[key]?.forEach((perm) => {
+          rpm[perm.role] = {
+            permissions: {
+              ...(rpm[perm.role] && rpm[perm.role].permissions),
+              [keyToPermission[key]]: perm.permission,
+            },
+          };
+        });
+      }
+      return rpm;
+    }, {});
+
+    const permissions = Object.keys(rolePermMap).map((role) => ({
+      role_name: role,
+      permissions: rolePermMap[role].permissions,
+      table_name: table.table_name,
+      table_schema: table.table_schema,
+    }));
+
+    const mergedInfo = {
+      table_schema: table.table_schema,
+      table_name: table.table_name,
+      table_type: table.table_type,
+      is_table_tracked: metadataTables.some(
+        (t) =>
+          t.table.name === table.table_name &&
+          t.table.schema === table.table_schema
+      ),
+      columns: table.columns,
+      comment: "",
+      triggers: [],
+      primary_key: null,
+      relationships,
+      permissions,
+      unique_constraints: [],
+      check_constraints: [],
+      foreign_key_constraints: fkConstraints,
+      opp_foreign_key_constraints: refFkConstraints,
+      view_info: null,
+      remote_relationships: [],
+      is_enum: false,
+      configuration: undefined,
+      computed_fields: [],
+    };
+
+    result.push(mergedInfo);
+  });
+  return result;
+};
 
 const sameRelCols = (currCols, existingCols) => {
-  return currCols.sort().join(',') === existingCols.sort().join(',');
+  return currCols.sort().join(",") === existingCols.sort().join(",");
 };
 
 const isExistingObjRel = (currentObjRels, relCols) => {
@@ -402,19 +386,19 @@ const suggestedRelationshipsRaw = (tableName, allSchemas, currentSchema) => {
   const arrRels = [];
 
   const currentTableSchema = allSchemas.find(
-    t => t.table_name === tableName && t.table_schema === currentSchema
+    (t) => t.table_name === tableName && t.table_schema === currentSchema
   );
 
   const currentTableRelationships = currentTableSchema.relationships;
 
   const currentObjRels = currentTableRelationships.filter(
-    r => r.rel_type === 'object'
+    (r) => r.rel_type === "object"
   );
   const currentArrRels = currentTableRelationships.filter(
-    r => r.rel_type === 'array'
+    (r) => r.rel_type === "array"
   );
 
-  currentTableSchema.foreign_key_constraints.forEach(fk_obj => {
+  currentTableSchema.foreign_key_constraints.forEach((fk_obj) => {
     if (!fk_obj.is_ref_table_tracked) {
       return;
     }
@@ -428,7 +412,7 @@ const suggestedRelationshipsRaw = (tableName, allSchemas, currentSchema) => {
         isObjRel: true,
         name: null,
         lcol: lcol,
-        rcol: lcol.map(column => fk_obj.column_mapping[column]),
+        rcol: lcol.map((column) => fk_obj.column_mapping[column]),
         rTable: fk_obj.ref_table,
         rSchema: fk_obj.ref_table_table_schema,
         isUnique: false,
@@ -436,7 +420,7 @@ const suggestedRelationshipsRaw = (tableName, allSchemas, currentSchema) => {
     }
   });
 
-  currentTableSchema.opp_foreign_key_constraints.forEach(o_fk_obj => {
+  currentTableSchema.opp_foreign_key_constraints.forEach((o_fk_obj) => {
     if (!o_fk_obj.is_table_tracked) {
       return;
     }
@@ -453,7 +437,7 @@ const suggestedRelationshipsRaw = (tableName, allSchemas, currentSchema) => {
           lSchema: o_fk_obj.ref_table_table_schema,
           name: null,
           rcol: rcol,
-          lcol: rcol.map(column => o_fk_obj.column_mapping[column]),
+          lcol: rcol.map((column) => o_fk_obj.column_mapping[column]),
           rTable: rTable,
           rSchema: o_fk_obj.table_schema,
           isObjRel: true,
@@ -467,7 +451,7 @@ const suggestedRelationshipsRaw = (tableName, allSchemas, currentSchema) => {
           lSchema: o_fk_obj.ref_table_table_schema,
           name: null,
           rcol: rcol,
-          lcol: rcol.map(column => o_fk_obj.column_mapping[column]),
+          lcol: rcol.map((column) => o_fk_obj.column_mapping[column]),
           rTable: rTable,
           rSchema: o_fk_obj.table_schema,
           isObjRel: false,
@@ -495,34 +479,34 @@ const suggestedRelationshipsRaw = (tableName, allSchemas, currentSchema) => {
   return { objectRel: finalObjRel, arrayRel: finalArrayRel };
 };
 
-const getExistingFieldsMap = tableSchema => {
-    const fieldMap = {};
-  
-    tableSchema.relationships.forEach(tr => {
-      fieldMap[tr.rel_name] = true;
-    });
-  
-    tableSchema.columns.forEach(tc => {
-      fieldMap[tc.column_name] = true;
-    });
-  
-    return fieldMap;
+const getExistingFieldsMap = (tableSchema) => {
+  const fieldMap = {};
+
+  tableSchema.relationships.forEach((tr) => {
+    fieldMap[tr.rel_name] = true;
+  });
+
+  tableSchema.columns.forEach((tc) => {
+    fieldMap[tc.column_name] = true;
+  });
+
+  return fieldMap;
 };
 
-const sanitizeRelName = arg => arg.trim();
+const sanitizeRelName = (arg) => arg.trim();
 
 const fallBackRelName = (relMeta, existingFields, iterNumber = 0) => {
   let relName;
   const targetTable = sanitizeRelName(relMeta.rTable);
   if (relMeta.isObjRel) {
-    const objLCol = sanitizeRelName(relMeta.lcol.join('_'));
+    const objLCol = sanitizeRelName(relMeta.lcol.join("_"));
     relName = `${inflection.singularize(targetTable)}_by_${objLCol}${
-      iterNumber ? '_' + iterNumber : ''
+      iterNumber ? "_" + iterNumber : ""
     }`;
   } else {
-    const arrRCol = sanitizeRelName(relMeta.rcol.join('_'));
+    const arrRCol = sanitizeRelName(relMeta.rcol.join("_"));
     relName = `${inflection.pluralize(targetTable)}_by_${arrRCol}${
-      iterNumber ? '_' + iterNumber : ''
+      iterNumber ? "_" + iterNumber : ""
     }`;
   }
   relName = inflection.camelize(relName, true);
@@ -534,311 +518,306 @@ const fallBackRelName = (relMeta, existingFields, iterNumber = 0) => {
     : relName;
 };
 
-const getMetadataQuery = (
-    type,
-    source,
-    args
-)=> {
-    return {
-      type: `mssql_${type}`,
-      args: { ...args, source },
-    };
+const getMetadataQuery = (type, source, args) => {
+  return {
+    type: `mssql_${type}`,
+    args: { ...args, source },
   };
+};
 
-const getCreateArrayRelationshipQuery = (
-table,
-name,
-source
-) =>
-getMetadataQuery('create_array_relationship', source, {
+const getCreateArrayRelationshipQuery = (table, name, source) =>
+  getMetadataQuery("create_array_relationship", source, {
     name,
     table,
     using: {},
-});
+  });
 
-const getCreateObjectRelationshipQuery = (
-    table,
-    name,
-    source
-  ) =>
-getMetadataQuery('create_object_relationship', source, {
+const getCreateObjectRelationshipQuery = (table, name, source) =>
+  getMetadataQuery("create_object_relationship", source, {
     name,
     table,
     using: {},
-});
+  });
 
 const formRelName = (relMeta, existingFields) => {
-    try {
-      let finalRelName;
-      const targetTable = sanitizeRelName(relMeta.rTable);
-      if (relMeta.isObjRel) {
-        finalRelName = inflection.singularize(targetTable);
-      } else {
-        finalRelName = inflection.pluralize(targetTable);
-      }
-  
-      /* Check if it is existing, fallback to guaranteed unique name */
-      if (existingFields && finalRelName in existingFields) {
-        finalRelName = fallBackRelName(relMeta, existingFields);
-      }
-  
-      return finalRelName;
-    } catch (e) {
-        console.log(e)
-      return '';
-    }
-  };
-
-  const generateRelationshipsQuery = (relMeta, currentDataSource) => {
-    let _upQuery;
-    let _downQuery;
-  
+  try {
+    let finalRelName;
+    const targetTable = sanitizeRelName(relMeta.rTable);
     if (relMeta.isObjRel) {
-      _upQuery = getCreateObjectRelationshipQuery(
-        {
-          name: relMeta.lTable,
-          schema: relMeta.lSchema,
-        },
-        relMeta.relName,
-        currentDataSource
-      );
-      const columnMaps = relMeta.lcol.map((column, index) => ({
-        lcol: column,
-        rcol: relMeta.rcol[index],
-      }));
-      if (columnMaps.length === 1 && !relMeta.isUnique) {
-        _upQuery.args.using = {
-          foreign_key_constraint_on: relMeta.lcol[0],
-        };
-      } else {
-        const columnReducer = (accumulator, val) => ({
-          ...accumulator,
-          [val.lcol]: val.rcol,
-        });
-        _upQuery.args.using = {
-          manual_configuration: {
-            remote_table: {
-              name: relMeta.rTable,
-              schema: relMeta.rSchema,
-            },
-            source: relMeta.source,
-            column_mapping: columnMaps.reduce(columnReducer, {}),
-          },
-        };
-      }
-  
-      _downQuery = '';
+      finalRelName = inflection.singularize(targetTable);
     } else {
-      _upQuery = getCreateArrayRelationshipQuery(
-        {
-          name: relMeta.lTable,
-          schema: relMeta.lSchema,
-        },
-        relMeta.relName,
-        currentDataSource
-      );
-      const columnMaps = relMeta.rcol.map((column, index) => ({
-        rcol: column,
-        lcol: relMeta.lcol[index],
-      }));
-      if (columnMaps.length === 1) {
-        _upQuery.args.using = {
-          foreign_key_constraint_on: {
-            table: {
-              name: relMeta.rTable,
-              schema: relMeta.rSchema,
-            },
-            column: relMeta.rcol[0],
-          },
-        };
-      } else {
-        const columnReducer = (accumulator, val) => ({
-          ...accumulator,
-          [val.lcol]: val.rcol,
-        });
-        _upQuery.args.using = {
-          manual_configuration: {
-            remote_table: {
-              name: relMeta.rTable,
-              schema: relMeta.rSchema,
-            },
-            source: currentDataSource,
-            column_mapping: columnMaps.reduce(columnReducer, {}),
-          },
-        };
-      }
-  
-      _downQuery = '';
+      finalRelName = inflection.pluralize(targetTable);
     }
-  
-    return { upQuery: _upQuery, downQuery: _downQuery };
+
+    /* Check if it is existing, fallback to guaranteed unique name */
+    if (existingFields && finalRelName in existingFields) {
+      finalRelName = fallBackRelName(relMeta, existingFields);
+    }
+
+    return finalRelName;
+  } catch (e) {
+    console.log(e);
+    return "";
+  }
+};
+
+const generateRelationshipsQuery = (relMeta, currentDataSource) => {
+  let _upQuery;
+  let _downQuery;
+
+  if (relMeta.isObjRel) {
+    _upQuery = getCreateObjectRelationshipQuery(
+      {
+        name: relMeta.lTable,
+        schema: relMeta.lSchema,
+      },
+      relMeta.relName,
+      currentDataSource
+    );
+    const columnMaps = relMeta.lcol.map((column, index) => ({
+      lcol: column,
+      rcol: relMeta.rcol[index],
+    }));
+    if (columnMaps.length === 1 && !relMeta.isUnique) {
+      _upQuery.args.using = {
+        foreign_key_constraint_on: relMeta.lcol[0],
+      };
+    } else {
+      const columnReducer = (accumulator, val) => ({
+        ...accumulator,
+        [val.lcol]: val.rcol,
+      });
+      _upQuery.args.using = {
+        manual_configuration: {
+          remote_table: {
+            name: relMeta.rTable,
+            schema: relMeta.rSchema,
+          },
+          source: relMeta.source,
+          column_mapping: columnMaps.reduce(columnReducer, {}),
+        },
+      };
+    }
+
+    _downQuery = "";
+  } else {
+    _upQuery = getCreateArrayRelationshipQuery(
+      {
+        name: relMeta.lTable,
+        schema: relMeta.lSchema,
+      },
+      relMeta.relName,
+      currentDataSource
+    );
+    const columnMaps = relMeta.rcol.map((column, index) => ({
+      rcol: column,
+      lcol: relMeta.lcol[index],
+    }));
+    if (columnMaps.length === 1) {
+      _upQuery.args.using = {
+        foreign_key_constraint_on: {
+          table: {
+            name: relMeta.rTable,
+            schema: relMeta.rSchema,
+          },
+          column: relMeta.rcol[0],
+        },
+      };
+    } else {
+      const columnReducer = (accumulator, val) => ({
+        ...accumulator,
+        [val.lcol]: val.rcol,
+      });
+      _upQuery.args.using = {
+        manual_configuration: {
+          remote_table: {
+            name: relMeta.rTable,
+            schema: relMeta.rSchema,
+          },
+          source: currentDataSource,
+          column_mapping: columnMaps.reduce(columnReducer, {}),
+        },
+      };
+    }
+
+    _downQuery = "";
+  }
+
+  return { upQuery: _upQuery, downQuery: _downQuery };
 };
 
 const getTableColumnNames = (table) => {
-  return table.columns.map(c => c.column_name);
+  return table.columns.map((c) => c.column_name);
 };
 
 function escapeTableColumns(table) {
   if (!table) return {};
   const pattern = /\W/g;
   return getTableColumnNames(table)
-    .filter(col => pattern.test(col))
+    .filter((col) => pattern.test(col))
     .reduce((acc, col) => {
-      acc[col] = col.replace(pattern, '_');
+      acc[col] = col.replace(pattern, "_");
       return acc;
     }, {});
 }
 
 async function mergeData() {
-    let res1 = await getListOfTables();
-    let res2 = await getListOfFKRelationships();
-    let metaDataTables = await getListOfTrackedTables();
-    let allSchemas  = mergeDataMssql([res1, res2], metaDataTables)
-    return allSchemas;
+  let res1 = await getListOfTables();
+  let res2 = await getListOfFKRelationships();
+  let metaDataTables = await getListOfTrackedTables();
+  let allSchemas = mergeDataMssql([res1, res2], metaDataTables);
+  return allSchemas;
 }
 
 async function main() {
-    
-    let allSchemas = [];
+  let allSchemas = [];
 
-    // [1] table tracking status
-    if (true) {
-        let display = new Table({
-            head: ['schema', 'table', 'is is tracked']
-          , colWidths: [30, 30, 30]
-        });    
-        allSchemas = await mergeData();
-        allSchemas.forEach(table => { 
-            display.push([table.table_schema, table.table_name, table.is_table_tracked])
-        })
-        console.log(display.toString())
-    }
+  // [1] table tracking status
+  if (true) {
+    let display = new Table({
+      head: ["schema", "table", "is is tracked"],
+      colWidths: [30, 30, 30],
+    });
+    allSchemas = await mergeData();
+    allSchemas.forEach((table) => {
+      display.push([
+        table.table_schema,
+        table.table_name,
+        table.is_table_tracked,
+      ]);
+    });
+    console.log(display.toString());
+  }
 
-    // [2] track tables
-    if (false) {
-        allSchemas = await mergeData();
-        let promises = [];
-        allSchemas.forEach(async (table) => { 
-            
-            if (!table.is_table_tracked) {
-                try {
-                    // block where each "table tracking API call" is made
-                    let body = {
-                      "type": "mssql_track_table",
-                      "args": {
-                          "table": {
-                              "name": table.table_name,
-                              "schema": table.table_schema
-                          },
-                          "source": DATABASE,
-                          "customColumnNames": escapeTableColumns(table)
-                      }
-                    };
+  // [2] track tables
+  if (false) {
+    allSchemas = await mergeData();
+    let promises = [];
+    allSchemas.forEach(async (table) => {
+      if (!table.is_table_tracked) {
+        try {
+          // block where each "table tracking API call" is made
+          let body = {
+            type: "mssql_track_table",
+            args: {
+              table: {
+                name: table.table_name,
+                schema: table.table_schema,
+              },
+              source: DATABASE,
+              customColumnNames: escapeTableColumns(table),
+            },
+          };
 
-                    let res = await trackTable(body);
-                    console.log(`${table.table_name} ${table.table_schema} ${JSON.stringify(res)}`)
-                } catch (err) {
-                    console.log(err)
-                }
-            }
-        })   
-    }
+          let res = await updateMetaData(body);
+          console.log(
+            `${table.table_name} ${table.table_schema} ${JSON.stringify(res)}`
+          );
+        } catch (err) {
+          console.log(err);
+        }
+      }
+    });
+  }
 
-    // [3] untracked relationships
-    if (false) {
-      allSchemas = await mergeData();
-      let uniqueSchemas = allSchemas.map(t => t.table_schema).filter((item, i, ar) => ar.indexOf(item) === i);  
-      let untrackedRelations = {};  
-      uniqueSchemas.forEach(currentSchema => {
-        let currentSource = DATABASE;
-        const trackedTables = allSchemas.filter(
-          table => table.is_table_tracked && table.table_schema === currentSchema
-        );
-        const tableRelMapping = trackedTables.map(table => ({
-          table_name: table.table_name,
-          existingFields: getExistingFieldsMap(table),
-          relations: suggestedRelationshipsRaw(
-            table.table_name,
-            allSchemas,
-            currentSchema
-          ),
-        }));
+  // [3] untracked relationships
+  if (false) {
+    allSchemas = await mergeData();
+    let uniqueSchemas = allSchemas
+      .map((t) => t.table_schema)
+      .filter((item, i, ar) => ar.indexOf(item) === i);
+    let untrackedRelations = {};
+    uniqueSchemas.forEach((currentSchema) => {
+      let currentSource = DATABASE;
+      const trackedTables = allSchemas.filter(
+        (table) =>
+          table.is_table_tracked && table.table_schema === currentSchema
+      );
+      const tableRelMapping = trackedTables.map((table) => ({
+        table_name: table.table_name,
+        existingFields: getExistingFieldsMap(table),
+        relations: suggestedRelationshipsRaw(
+          table.table_name,
+          allSchemas,
+          currentSchema
+        ),
+      }));
 
-        let bulkRelTrack = [];
-        tableRelMapping.forEach(table => {
-            // check relations.obj and relations.arr length and form queries
-            if (table.relations.objectRel.length) {
-              table.relations.objectRel.forEach(indivObjectRel => {
-                indivObjectRel.relName = formRelName(
-                  indivObjectRel,
-                  table.existingFields
-                );
-                /* Added to ensure that fallback relationship name is created in case of tracking all relationship at once */
-                table.existingFields[indivObjectRel.relName] = true;
-                const { upQuery, downQuery } = generateRelationshipsQuery(
-                  indivObjectRel,
-                  currentSource
-                );
-        
-                const objTrack = {
-                  upQuery,
-                  downQuery,
-                  data: indivObjectRel,
-                };
-        
-                bulkRelTrack.push(objTrack);
-                console.log(`${currentSchema} ${objTrack.data.relName} [object] [not tracked]`)
+      let bulkRelTrack = [];
+      tableRelMapping.forEach((table) => {
+        // check relations.obj and relations.arr length and form queries
+        if (table.relations.objectRel.length) {
+          table.relations.objectRel.forEach((indivObjectRel) => {
+            indivObjectRel.relName = formRelName(
+              indivObjectRel,
+              table.existingFields
+            );
+            /* Added to ensure that fallback relationship name is created in case of tracking all relationship at once */
+            table.existingFields[indivObjectRel.relName] = true;
+            const { upQuery, downQuery } = generateRelationshipsQuery(
+              indivObjectRel,
+              currentSource
+            );
 
-                // [4] track object relationships
-                if (false) {
-                  let res = trackRel(objTrack.upQuery);
-                  res.then(data => {
-                    console.log(res);
-                  })
-                }
+            const objTrack = {
+              upQuery,
+              downQuery,
+              data: indivObjectRel,
+            };
 
+            bulkRelTrack.push(objTrack);
+            console.log(
+              `${currentSchema} ${objTrack.data.relName} [object] [not tracked]`
+            );
+
+            // [4] track object relationships
+            if (false) {
+              let res = updateMetaData(objTrack.upQuery);
+              res.then((data) => {
+                console.log(res);
               });
             }
-        
-            if (table.relations.arrayRel.length) {
-              table.relations.arrayRel.forEach(indivArrayRel => {
-                indivArrayRel.relName = formRelName(
-                  indivArrayRel,
-                  table.existingFields
-                );
-                /* Added to ensure that fallback relationship name is created in case of tracking all relationship at once */
-                table.existingFields[indivArrayRel.relName] = true;
-                const { upQuery, downQuery } = generateRelationshipsQuery(
-                  indivArrayRel,
-                  currentSource
-                );
-        
-                const arrTrack = {
-                  upQuery,
-                  downQuery,
-                  data: indivArrayRel,
-                };
-        
-                bulkRelTrack.push(arrTrack);
-                console.log(`${currentSchema} ${arrTrack.data.relName} [array] [not tracked]`)
-
-                // [5] track array relationships
-                if (false) {
-                  let res = trackRel(arrTrack.upQuery);
-                  res.then(data => {
-                    console.log(res);
-                  })
-                }
-
-              });
-            }
-            
           });
-          // [6] - all suggested relationships grouped by schema
-          untrackedRelations[currentSchema] = bulkRelTrack;
-      })
-    }
-}
+        }
 
+        if (table.relations.arrayRel.length) {
+          table.relations.arrayRel.forEach((indivArrayRel) => {
+            indivArrayRel.relName = formRelName(
+              indivArrayRel,
+              table.existingFields
+            );
+            /* Added to ensure that fallback relationship name is created in case of tracking all relationship at once */
+            table.existingFields[indivArrayRel.relName] = true;
+            const { upQuery, downQuery } = generateRelationshipsQuery(
+              indivArrayRel,
+              currentSource
+            );
+
+            const arrTrack = {
+              upQuery,
+              downQuery,
+              data: indivArrayRel,
+            };
+
+            bulkRelTrack.push(arrTrack);
+            console.log(
+              `${currentSchema} ${arrTrack.data.relName} [array] [not tracked]`
+            );
+
+            // [5] track array relationships
+            if (false) {
+              let res = updateMetaData(arrTrack.upQuery);
+              res.then((data) => {
+                console.log(res);
+              });
+            }
+          });
+        }
+      });
+      // [6] - all suggested relationships grouped by schema
+      untrackedRelations[currentSchema] = bulkRelTrack;
+    });
+  }
+}
 
 main();

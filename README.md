@@ -13,6 +13,11 @@ Look for the following comments -
    ```
    Modify the database name here
 
+- `modify hasura url`
+
+   ```javascript
+   let HASURA_URL = 'http://localhost:8080'
+   ```
 
 - `[1] table tracking status` - This block of code is enabled/disabled by a `boolean` flag. When this code is enabled, the script fetches the list of schema and the tables under them and display the `tracked` status according to the Hasura server.
 
