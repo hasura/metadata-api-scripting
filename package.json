@@ -4,6 +4,8 @@
   "description": "",
   "main": "main.js",
   "dependencies": {
+    "cli-table": "^0.3.6",
+    "inflection": "^1.12.0",
     "node-fetch": "^2.6.1"
   },
   "devDependencies": {},
