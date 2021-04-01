@@ -711,7 +711,7 @@ async function main() {
 
 
     // table tracking  status
-    if (false) {
+    if (true) {
         let display = new Table({
             head: ['schema', 'table', 'is is tracked']
           , colWidths: [30, 30, 30]
@@ -753,7 +753,7 @@ async function main() {
         })   
     }
 
-    if (true) {
+    if (false) {
       allSchemas = await mergeData();
       let uniqueSchemas = allSchemas.map(t => t.table_schema).filter((item, i, ar) => ar.indexOf(item) === i);  
       let untrackedRelations = {};  
@@ -797,7 +797,7 @@ async function main() {
                 bulkRelTrack.push(objTrack);
                 console.log(`${currentSchema} ${objTrack.data.relName} [object] [not tracked]`)
 
-                if (true) {
+                if (false) {
                   let res = trackRel(objTrack.upQuery);
                   res.then(data => {
                     console.log(res);
@@ -829,7 +829,7 @@ async function main() {
                 bulkRelTrack.push(arrTrack);
                 console.log(`${currentSchema} ${arrTrack.data.relName} [array] [not tracked]`)
 
-                if (true) {
+                if (false) {
                   let res = trackRel(arrTrack.upQuery);
                   res.then(data => {
                     console.log(res);
